@@ -20,6 +20,7 @@ const routingSchema = jsonSchema<{ agent: string; reason: string }>({
     reason: { type: 'string' },
   },
   required: ['agent', 'reason'],
+  additionalProperties: false, // required by Anthropic structured output API
 });
 
 /**
