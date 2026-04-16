@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { google } from '@ai-sdk/google';
+import { anthropic } from '@ai-sdk/anthropic';
 import { MANAGER_PROMPT } from '../prompts/manager-prompt';
 import type { AgentName, RoutingDecision, ChatMessage } from './types';
 
@@ -33,7 +33,7 @@ export async function classifyIntent(
   try {
     // Manager call — use Flash Lite for fast, low-cost routing
     const { text } = await generateText({
-      model: google('gemini-2.0-flash-lite'),
+      model: anthropic('claude-haiku-4.5-20251001'),
       system: MANAGER_PROMPT,
       messages: [
         // Map history: strip the 'agent' metadata field, keep only role + content

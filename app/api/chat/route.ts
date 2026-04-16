@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { streamText } from 'ai';
-import { google } from '@ai-sdk/google';
+import { anthropic } from '@ai-sdk/anthropic';
 import { classifyIntent } from '@/lib/manager';
 import { loadKnowledgeBase } from '@/lib/kb-loader';
 import { AGENT_COLORS, AGENT_NAMES, MAX_HISTORY_MESSAGES } from '@/lib/agents';
@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
     // R4 mitigation: if streaming fails, fall back to generateText and return full JSON
     try {
       const result = await streamText({
-        model: google('gemini-2.0-flash'),
+        model: anthropic('claude-haiku-4-5-20251001'),
         system,
         messages: agentMessages,
       });
@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
       console.error('[route] streamText failed, using non-streaming fallback:', streamErr);
       const { generateText } = await import('ai');
       const { text } = await generateText({
-        model: google('gemini-2.0-flash'),
+        model: anthropic('claude-haiku-4-5-20251001'),
         system,
         messages: agentMessages,
       });
