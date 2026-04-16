@@ -49,11 +49,16 @@ export async function classifyIntent(
     // R3 mitigation: log latency on every call — target is under 2000ms
     console.log(`[manager] Routing decision in ${elapsed}ms`);
 
-    // Strip markdown code fences if the model wraps JSON in ```json ... ```
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+    // Extract JSON object from anywhere in the response.
+    // Haiku sometimes adds preamble text or wraps JSON in code fences — this handles all cases.
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('[manager] No JSON object found in response → fallback: compass');
+      return { agent: 'compass', reason: 'fallback: no JSON found in manager output' };
+    }
 
     // RISK 3 mitigation: validate shape before casting — JSON.parse returns any
-    const parsed: unknown = JSON.parse(cleaned);
+    const parsed: unknown = JSON.parse(jsonMatch[0]);
 
     if (
       typeof parsed === 'object' &&
