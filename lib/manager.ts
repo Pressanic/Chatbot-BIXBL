@@ -1,10 +1,9 @@
 import { generateText } from 'ai';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { google } from '@ai-sdk/google';
 import { MANAGER_PROMPT } from '../prompts/manager-prompt';
 import type { AgentName, RoutingDecision, ChatMessage } from './types';
 
 // WARNING: this file is server-side only. Never import it from a client component.
-// It reads process.env.ANTHROPIC_API_KEY which is only available server-side.
 
 /** The three valid agent values the Manager can return. Used for runtime validation. */
 const VALID_AGENTS: AgentName[] = ['compass', 'architect', 'bridge'];
@@ -32,9 +31,9 @@ export async function classifyIntent(
   const startTime = Date.now();
 
   try {
-    // Manager call — use fastest Claude model to minimize latency (Risk R3)
+    // Manager call — use Flash Lite for fast, low-cost routing
     const { text } = await generateText({
-      model: createAnthropic()('claude-haiku-4-5'),
+      model: google('gemini-2.0-flash-lite'),
       system: MANAGER_PROMPT,
       messages: [
         // Map history: strip the 'agent' metadata field, keep only role + content

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { streamText, stepCountIs } from 'ai';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { streamText } from 'ai';
+import { google } from '@ai-sdk/google';
 import { classifyIntent } from '@/lib/manager';
 import { loadKnowledgeBase } from '@/lib/kb-loader';
 import { AGENT_COLORS, AGENT_NAMES, MAX_HISTORY_MESSAGES } from '@/lib/agents';
@@ -123,11 +123,8 @@ function buildAgentContext(
 /**
  * POST /api/chat — main API route handler.
  *
- * Sprint 3: validates input → calls Manager → returns routing decision as JSON.
- * Sprint 4 will extend this to: load KB → call specialist agent → stream response.
- *
  * Risk R1 mitigation: history is truncated to MAX_HISTORY_MESSAGES before any LLM call.
- * Risk R5 mitigation: API keys are accessed only server-side (via classifyIntent).
+ * Risk R5 mitigation: API keys are accessed only server-side.
  */
 export async function POST(request: NextRequest) {
   // Phase 1: validate input — return 400 on any validation failure
@@ -155,7 +152,7 @@ export async function POST(request: NextRequest) {
       body.current_agent,
     );
 
-    // Phase 3: Load KB and call specialist agent with streaming (GAP 1 mitigation: streamText)
+    // Phase 3: Load KB and call specialist agent with streaming
     const [agentPrompt, kb] = await Promise.all([
       Promise.resolve(getAgentPrompt(decision.agent)),
       loadKnowledgeBase(decision.agent),
@@ -169,27 +166,16 @@ export async function POST(request: NextRequest) {
 
     const { system, messages: agentMessages } = buildAgentContext(agentPrompt, kb, fullHistory);
 
-    // Specialist agent streaming call — use Sonnet for quality responses
     const streamStart = Date.now();
-
-    const isBridge = decision.agent === 'bridge';
-    const anthropic = createAnthropic();
 
     // R4 mitigation: if streaming fails, fall back to generateText and return full JSON
     try {
       const result = await streamText({
-        model: isBridge
-          ? anthropic('claude-sonnet-4-5')
-          : anthropic('claude-sonnet-4-6'),
+        model: google('gemini-2.0-flash'),
         system,
         messages: agentMessages,
-        ...(isBridge && {
-          tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 5 }) },
-          stopWhen: stepCountIs(5),
-        }),
       });
       console.log(`[route] Stream started for ${decision.agent} in ${Date.now() - streamStart}ms`);
-      // Note: toDataStreamResponse() was renamed to toUIMessageStreamResponse() in AI SDK v6
       const response = result.toUIMessageStreamResponse();
       response.headers.set('x-agent', decision.agent);
       response.headers.set('x-agent-color', AGENT_COLORS[decision.agent]);
@@ -200,7 +186,7 @@ export async function POST(request: NextRequest) {
       console.error('[route] streamText failed, using non-streaming fallback:', streamErr);
       const { generateText } = await import('ai');
       const { text } = await generateText({
-        model: anthropic('claude-sonnet-4-6'),
+        model: google('gemini-2.0-flash'),
         system,
         messages: agentMessages,
       });
