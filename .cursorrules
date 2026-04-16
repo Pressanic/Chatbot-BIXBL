@@ -1,0 +1,186 @@
+# BIXBG Chatbot — IDE Operational Rules
+
+> These rules are absolute constraints. Code that violates any rule below is wrong by definition.
+> Read this file before generating any code for this project.
+
+---
+
+## Project Context
+
+This project is a web chatbot for **Belle idee x Bella gente (BIXBG)**, an internal tool used exclusively by the founder (Matteo) to qualify experience ideas, structure them creatively, and identify partner/sponsor profiles. The system is a **multi-agent architecture** composed of 4 AI agents (Manager, Compass, Architect, Bridge) that route user messages to the correct specialist via a two-step LLM pipeline. The stack is **Next.js (App Router) + React + Tailwind CSS**, deployed on Vercel, using the **Vercel AI SDK** and the **Claude API (Anthropic)** as the LLM provider.
+
+---
+
+## File Structure
+
+Place every file in the exact path specified. Do not create new top-level directories without explicit instruction.
+
+```
+/app/
+  page.tsx                        # Root page — chat UI entry point
+  layout.tsx                      # Root layout (fonts, global metadata)
+  globals.css                     # Global styles
+
+/app/api/
+  chat/
+    route.ts                      # Single API route — all LLM calls go here
+
+/knowledge-base/
+  shared.md                       # Shared KB injected into every agent
+  compass.md                      # Vertical KB for Compass only
+  architect.md                    # Vertical KB for Architect only
+  bridge.md                       # Vertical KB for Bridge only
+
+/app/components/
+  ChatWindow.tsx                  # Main chat container component
+  MessageBubble.tsx               # Individual message display component
+  AgentIndicator.tsx              # Shows active agent name + color badge
+  ChatInput.tsx                   # Message input + submit button
+
+/lib/
+  agents.ts                       # Agent definitions: names, colors, prompt loaders
+  manager.ts                      # Manager routing logic (LLM call + JSON parse)
+  kb-loader.ts                    # Reads .md files from /knowledge-base/ at runtime
+
+/prompts/
+  compass.ts                      # System prompt for Compass (as exported string)
+  architect.ts                    # System prompt for Architect
+  bridge.ts                       # System prompt for Bridge
+  manager-prompt.ts               # System prompt for Manager
+                                    # NOTE: named manager-prompt.ts (not manager.ts) to avoid
+                                    # import ambiguity with /lib/manager.ts
+
+.env.local                        # API key — never committed, never imported client-side
+.gitignore                        # Must include .env.local
+```
+
+---
+
+## Naming Conventions
+
+- Name **files and folders** in `kebab-case`. Example: `kb-loader.ts`, `knowledge-base/`.
+- Name **React components** in `PascalCase`. Example: `ChatWindow`, `MessageBubble`.
+- Name **TypeScript interfaces and types** in `PascalCase` with a descriptive noun. Example: `AgentName`, `RoutingDecision`, `ChatMessage`.
+- Name **functions and variables** in `camelCase`. Example: `loadKnowledgeBase`, `currentAgent`, `routingDecision`.
+- Name **environment variables** in `UPPER_SNAKE_CASE`, prefixed with the provider name. Example: `ANTHROPIC_API_KEY`.
+- Name **agent identifiers** in lowercase string literals only: `"compass"`, `"architect"`, `"bridge"`. Never use uppercase or abbreviations.
+- Name **exported constants** in `UPPER_SNAKE_CASE`. Example: `AGENT_COLORS`, `MAX_HISTORY_MESSAGES`.
+
+---
+
+## Mandatory Patterns
+
+### API Route (`/app/api/chat/route.ts`)
+- Wrap the entire route handler body in a `try/catch` block. Return a structured JSON error response with HTTP 500 on any uncaught exception.
+- Validate that the incoming request body contains `message` (non-empty string) and `history` (array) before making any LLM call. Return HTTP 400 with a descriptive error if validation fails.
+- Call the Manager LLM first (classification). Parse its JSON response before proceeding. Validate that the parsed `agent` field is one of `'compass' | 'architect' | 'bridge'`. If JSON parsing fails OR the agent value is invalid, log the raw Manager output server-side and default to `'compass'` as the fallback agent — never return HTTP 500 to the client for a Manager failure. A broken UX is worse than a graceful fallback.
+- Load the KB files using `fs.promises.readFile` with `path.join(process.cwd(), 'knowledge-base', filename)`. Wrap in `try/catch`. If a KB file is missing, log a warning and continue with an empty string — do not crash the route. Never use `__dirname` or relative paths — they break in the Vercel serverless environment.
+- Truncate `history` to the last 20 messages before injecting it into any LLM call. Define this limit as the exported constant `MAX_HISTORY_MESSAGES = 20` in `/lib/agents.ts`.
+- Return the streaming response using `streamText()` + `.toDataStreamResponse()` from the Vercel AI SDK v3+. Do NOT use `StreamingTextResponse` — it was removed in AI SDK v3. Set `x-agent`, `x-agent-color`, and `x-agent-name` as response headers on the returned Response object before returning it.
+- Never log the full API key. Log only the first 8 characters for diagnostics.
+
+### Frontend (`/app/components/`)
+- Every React component must be a named export (not default export). This makes refactoring and tree-shaking explicit.
+- Wrap the `ChatWindow` component in a React `ErrorBoundary`. Display a visible fallback UI on error.
+- Use the `useChat` hook from the Vercel AI SDK to manage conversation history and streaming state. The `useChat` hook stores state in the React tree and resets on page reload — this satisfies the session-based, non-persistent requirement. Do not use `localStorage`, `sessionStorage`, or any external store (Redux, Zustand, etc.).
+- Read the active agent identity from response headers using the `onResponse` callback of `useChat`. Store the parsed agent identity in a separate `useState` variable. Never hardcode agent names or colors in component state.
+- Derive the active agent name and color from the response headers returned by `/api/chat`. Never hardcode agent state in the frontend.
+- Disable the submit button and input field while a streaming response is in progress. Re-enable them only when streaming is complete.
+
+### Knowledge Base Loading (`/lib/kb-loader.ts`)
+- Read all `.md` files using `fs.promises.readFile` at request time (runtime read, not build time).
+- Export a single function `loadKnowledgeBase(agent: AgentName): Promise<{ shared: string; vertical: string }>` that returns both the shared KB and the vertical KB for the given agent.
+- Add a JSDoc comment on every exported function describing its inputs, outputs, and the behavior on error.
+
+### Prompts (`/prompts/`)
+- Export each system prompt as a plain TypeScript string constant. Example: `export const COMPASS_PROMPT = \`...\``.
+- Do not construct system prompts dynamically at runtime. All prompt text is static and defined at import time.
+
+### General
+- Add a JSDoc comment above every exported function, regardless of how obvious the function appears.
+- Use named exports everywhere. Default exports are forbidden.
+- Use `async/await` for all asynchronous operations. Do not use `.then()/.catch()` chains.
+
+---
+
+## Forbidden Patterns
+
+- **Never make LLM API calls from the frontend.** All calls to Claude (or any LLM provider) must go through `/app/api/chat/route.ts`. Violation exposes the API key to the client.
+- **Never import `process.env` values in any file under `/app/components/` or any client-side module.** Environment variables are server-only.
+- **Never commit `.env.local`.** It must always be present in `.gitignore`. If this file appears in a diff, something is wrong.
+- **Never use `localStorage` or `sessionStorage`.** Conversation history is session-based React state. Persistence is explicitly out of scope.
+- **Never add a database, ORM, or persistent storage layer.** No Prisma, no Supabase, no Redis, no SQLite. Stateless by design.
+- **Never add user authentication or session management.** No NextAuth, no Clerk, no JWT. The tool is single-user by design.
+- **Never send the entire unbounded conversation history to the LLM.** Always truncate to `MAX_HISTORY_MESSAGES` before any API call. Unbounded history causes context window overflow (Risk R1).
+- **Never route to a non-existent agent.** The Manager's `agent` field must be one of: `"compass"`, `"architect"`, `"bridge"`. Validate this in code before using the value.
+- **Never skip the Manager call.** Every user message must be classified by the Manager before the specialist agent is called. Hard-coding which agent responds is forbidden.
+- **Never name an agent in user-visible text.** Components must not hardcode strings like `"Bridge"` or `"Compass"` in rendered output — always derive them from the response headers.
+- **Never add analytics, tracking, or logging services.** No Mixpanel, no Sentry, no PostHog. Explicitly out of scope.
+- **Never use a default export — with one exception.** `page.tsx` and `layout.tsx` must use `export default` as required by the Next.js App Router framework. All other files in this project use named exports exclusively.
+- **Never use `.then()/.catch()` chains.** Use `async/await` with `try/catch` exclusively.
+- **Never add an admin panel, settings page, or configuration UI.** The only page is the chat interface.
+
+---
+
+## Libraries and Dependencies
+
+### USE
+
+| Package | Purpose |
+|---|---|
+| `next` (latest stable) | Framework — App Router |
+| `react` / `react-dom` | UI rendering |
+| `ai` (Vercel AI SDK v3+, latest stable) | LLM streaming via `streamText` + `toDataStreamResponse`, `useChat` hook |
+| `@anthropic-ai/sdk` | Claude API client (server-side only) |
+| `tailwindcss` | Utility-first CSS |
+| `typescript` | Type safety across the project |
+| `fs` (Node built-in) | Reading `.md` KB files at runtime |
+
+### DO NOT USE
+
+| Package | Reason |
+|---|---|
+| Any database client (Prisma, Drizzle, Mongoose…) | No database — explicitly out of scope |
+| `next-auth`, Clerk, Auth.js, or any auth library | No authentication — explicitly out of scope |
+| `zustand`, `jotai`, `redux` | State management beyond React `useState` is not needed |
+| `langchain` or `llamaindex` | No RAG, no embeddings, no vector store — static KB only |
+| `axios` | Use native `fetch` — no additional HTTP client needed |
+| Any analytics SDK (Mixpanel, Segment, PostHog…) | Analytics is out of scope |
+| Any payment SDK (Stripe, Paddle…) | Payments are out of scope |
+
+> If a dependency not on this list appears necessary, stop and ask before installing it.
+
+---
+
+## Security
+
+- Store the API key **only** in `.env.local` under the variable name `ANTHROPIC_API_KEY`. This file must not be committed to Git.
+- Access `process.env.ANTHROPIC_API_KEY` **only** inside `/app/api/chat/route.ts` or files imported exclusively by server-side modules. Never access it in any component or client module.
+- Validate and sanitize all incoming request bodies in the API route before use. Reject requests with unexpected or malformed fields with HTTP 400.
+- Do not reflect raw user input directly into LLM system prompts. User messages go only into the `messages` array (not the system prompt), exactly as the Vercel AI SDK expects.
+- Configure the Next.js API route to accept requests only from the same origin. Do not add permissive CORS headers.
+- Never log full request bodies containing user conversation history. Log only routing decisions (agent name, reason) for debugging.
+- Do not expose internal error stack traces to the client response. Return a generic error message to the client; log the full error server-side only.
+
+---
+
+## Code Style
+
+- **Maximum function length:** 40 lines. If a function exceeds 40 lines, split it into named helper functions.
+- **Indentation:** 2 spaces. No tabs.
+- **Semicolons:** Required at the end of every statement.
+- **Quotes:** Single quotes for all strings in TypeScript/JavaScript. Double quotes only inside JSX attribute values.
+- **Trailing commas:** Required in multi-line arrays and objects.
+- **Line length:** Maximum 100 characters per line.
+- **TypeScript strictness:** Enable `strict: true` in `tsconfig.json`. No `any` types unless explicitly unavoidable — in which case add an inline comment explaining why.
+- **JSON.parse typing:** `JSON.parse()` returns `any`. Never use the result directly — always apply a runtime validation guard before casting to a typed interface. Example: check that `result.agent` is a member of `VALID_AGENTS` before casting `result as RoutingDecision`.
+
+### Comments — Mandatory
+- Add a JSDoc block above every exported function, type, and constant.
+- Add an inline comment on every `try/catch` block explaining what specific error it guards against.
+- Add a comment above every LLM call explaining which agent is being called and what its expected output format is.
+
+### Comments — Forbidden
+- Do not add comments that restate what the code already clearly expresses. Example: `// increment i` above `i++` is forbidden.
+- Do not leave `// TODO` or `// FIXME` comments in committed code. Resolve them before committing.
+- Do not add commented-out code blocks. Delete unused code; version control handles history.

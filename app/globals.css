@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-compass: #6475FA;
+  --color-architect: #E8650A;
+  --color-bridge: #22C55E;
+  --color-bg: #0f0f0f;
+  --color-surface: #1a1a1a;
+  --color-border: #2a2a2a;
+  --color-text: #f0f0f0;
+  --color-text-muted: #888888;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
