@@ -4,43 +4,34 @@ import ReactMarkdown from 'react-markdown';
 
 /**
  * stripCodeFenceLabel — removes opening code fence labels used as structured output markers.
- * Strips ` ```partners `, ` ```experience `, ` ```profile `, ` ```summary ` labels
- * so ReactMarkdown receives clean content without artifact labels.
+ * Strips ```partners, ```experience, ```profile labels so ReactMarkdown receives clean content.
+ * Summary fences are handled separately as an inline card.
  */
 function stripCodeFenceLabel(content: string): string {
-  return content.replace(/^```(partners|experience|profile|summary)\n?/im, '```\n');
+  return content.replace(/^```(partners|experience|profile)\n?/im, '```\n');
 }
 
 /**
- * hasSummaryFence — returns true if content contains a ` ```summary ` block.
- * Used to conditionally show the export download button.
+ * extractSummaryContent — returns the text inside a ```summary block, or null if absent.
  */
-function hasSummaryFence(content: string): boolean {
-  return /```summary/i.test(content);
-}
-
-/**
- * downloadSummary — extracts text inside ` ```summary ` block and downloads as .md file.
- */
-function downloadSummary(content: string): void {
+function extractSummaryContent(content: string): string | null {
   const match = content.match(/```summary\n?([\s\S]*?)```/i);
-  const text = match ? match[1].trim() : content;
-  const blob = new Blob([text], { type: 'text/markdown' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `bixbg-summary-${new Date().toISOString().slice(0, 10)}.md`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return match ? match[1].trim() : null;
 }
 
 /**
- * MessageBubble — renders a single chat message with role-appropriate styling.
- * Assistant messages are rendered with ReactMarkdown + Tailwind typography prose.
- * @param content - The message text content
- * @param role - 'user' or 'assistant' — controls alignment and style
- * @param agentName - Display name shown above assistant messages
- * @param agentColor - Hex color applied as left border accent on assistant messages
+ * removeSummaryBlock — strips the full ```summary...``` block from content.
+ * Used so the summary is not also rendered as a raw code block in the main prose.
+ */
+function removeSummaryBlock(content: string): string {
+  return content.replace(/```summary[\s\S]*?```/i, '').trim();
+}
+
+/**
+ * MessageBubble — renders a single chat message.
+ * Assistant messages use ReactMarkdown + Tailwind typography.
+ * When a ```summary block is present it is rendered as an inline schematic card,
+ * not downloaded as a file.
  */
 export function MessageBubble({
   content,
@@ -63,33 +54,74 @@ export function MessageBubble({
     );
   }
 
-  const cleanContent = stripCodeFenceLabel(content);
-  const showDownload = hasSummaryFence(content);
+  const summaryContent = extractSummaryContent(content);
+  const contentForRendering = summaryContent ? removeSummaryBlock(content) : content;
+  const cleanContent = stripCodeFenceLabel(contentForRendering);
+  const accent = agentColor ?? '#6475FA';
 
   return (
     <div className="flex justify-start mb-4">
       <div
         className="max-w-[80%] px-4 py-3 rounded-2xl rounded-tl-sm bg-[#1a1a1a] text-[#f0f0f0] text-sm leading-relaxed border-l-4"
-        style={{ borderColor: agentColor ?? '#6475FA' }}
+        style={{ borderColor: accent }}
       >
         {agentName && (
-          <p
-            className="text-xs font-semibold mb-1 opacity-70"
-            style={{ color: agentColor ?? '#6475FA' }}
-          >
+          <p className="text-xs font-semibold mb-1 opacity-70" style={{ color: accent }}>
             {agentName}
           </p>
         )}
-        <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-li:my-0 prose-headings:text-[#f0f0f0] prose-a:text-[#6475FA]">
-          <ReactMarkdown>{cleanContent}</ReactMarkdown>
-        </div>
-        {showDownload && (
-          <button
-            onClick={() => downloadSummary(content)}
-            className="mt-3 text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-[#aaa] hover:text-[#f0f0f0] hover:border-[#6475FA] transition-colors"
-          >
-            Scarica .md
-          </button>
+
+        {/* Main prose content */}
+        {cleanContent && (
+          <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-li:my-0 prose-headings:text-[#f0f0f0] prose-a:text-[#6475FA]">
+            <ReactMarkdown>{cleanContent}</ReactMarkdown>
+          </div>
+        )}
+
+        {/* Inline summary card — replaces the old "Scarica .md" download button */}
+        {summaryContent && (
+          <div className="mt-3 rounded-xl overflow-hidden border border-[#2a2a2a]">
+            {/* Card header */}
+            <div
+              className="px-4 py-2 border-b border-[#2a2a2a] flex items-center gap-2"
+              style={{ backgroundColor: `${accent}14` }}
+            >
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 12 12"
+                fill={accent}
+                className="flex-shrink-0 opacity-80"
+              >
+                <rect x="0" y="0" width="5" height="1.5" rx="0.75" />
+                <rect x="0" y="3.5" width="12" height="1.5" rx="0.75" />
+                <rect x="0" y="7" width="9" height="1.5" rx="0.75" />
+                <rect x="0" y="10.5" width="7" height="1.5" rx="0.75" />
+              </svg>
+              <p
+                className="text-[10px] font-semibold uppercase tracking-widest"
+                style={{ color: accent }}
+              >
+                Riepilogo
+              </p>
+            </div>
+
+            {/* Card body — summary rendered as styled markdown */}
+            <div
+              className="px-4 py-3 bg-[#111]"
+              style={
+                {
+                  '--tw-prose-body': '#c0c0c0',
+                  '--tw-prose-headings': '#e8e8e8',
+                  '--tw-prose-bold': '#e8e8e8',
+                } as React.CSSProperties
+              }
+            >
+              <div className="prose prose-invert prose-sm max-w-none [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-[#e8e8e8] [&_h1]:mb-3 [&_h1]:mt-0 [&_h1]:leading-snug [&_h2]:text-[10px] [&_h2]:uppercase [&_h2]:tracking-widest [&_h2]:text-[#555] [&_h2]:font-semibold [&_h2]:mb-1.5 [&_h2]:mt-4 [&_h2]:first:mt-0 [&_p]:my-1 [&_p]:text-[#b0b0b0] [&_p]:text-xs [&_li]:text-[#b0b0b0] [&_li]:text-xs [&_li]:my-0.5 [&_strong]:text-[#e0e0e0] [&_ul]:pl-4 [&_ol]:pl-4">
+                <ReactMarkdown>{summaryContent}</ReactMarkdown>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

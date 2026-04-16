@@ -7,6 +7,8 @@ import type { UIMessage, TextUIPart } from 'ai';
 import { AgentIndicator } from './AgentIndicator';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
+import { ConversationSidebar } from './ConversationSidebar';
+import type { SavedConversation } from './ConversationSidebar';
 import { AGENT_COLORS, AGENT_NAMES } from '@/lib/agents';
 import type { AgentName } from '@/lib/types';
 
@@ -23,9 +25,11 @@ const DEFAULT_AGENT: ActiveAgent = {
   name: AGENT_NAMES.compass,
 };
 
+const STORAGE_KEY = 'bixbg_conversations';
+const MAX_SAVED = 30;
+
 /**
  * getMessageText — extracts plain text from a v6 UIMessage's parts array.
- * Only text parts are included; tool calls, reasoning, and other parts are ignored.
  */
 function getMessageText(msg: UIMessage): string {
   return msg.parts
@@ -34,73 +38,60 @@ function getMessageText(msg: UIMessage): string {
     .join('');
 }
 
-/**
- * exportConversation — generates a .md file from the current
- * conversation history and triggers a browser download.
- * Uses Blob + URL.createObjectURL — no server required.
- * @param messages - The full UIMessage array from useChat
- * @param currentAgent - The currently active agent (for context)
- */
-function exportConversation(
-  messages: UIMessage[],
-  currentAgent: ActiveAgent,
-): void {
-  const timestamp = new Date().toISOString().split('T')[0];
-  const lines: string[] = [
-    '# BIXBG — Conversazione esportata',
-    `**Data:** ${timestamp}`,
-    '',
-    '---',
-    '',
-  ];
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
-  for (const msg of messages) {
-    const text = getMessageText(msg);
-    if (!text.trim()) continue;
-    if (msg.role === 'user') {
-      lines.push(`**Matteo:** ${text}`, '');
-    } else {
-      lines.push(`**BIXBG:** ${text}`, '');
-    }
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('it-IT', {
+    day: '2-digit',
+    month: 'short',
+  });
+}
+
+function loadConversations(): SavedConversation[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
   }
+}
 
-  const content = lines.join('\n');
-  const blob = new Blob([content], { type: 'text/markdown' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `bixbg-conversazione-${timestamp}.md`;
-  a.click();
-  URL.revokeObjectURL(url);
+function persistConversations(convs: SavedConversation[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(convs.slice(0, MAX_SAVED)));
+  } catch {}
 }
 
 /**
  * ChatWindow — main chat container. Client component.
- * Uses useChat (AI SDK v6) for streaming and message history.
+ * Includes a collapsible sidebar with conversation history (localStorage).
  * Agent identity is driven exclusively by x-agent response headers (GAP 2 mitigation).
- * Headers are captured via a custom fetch wrapper in DefaultChatTransport.
- * History resets on page reload — no persistence (by design, per Anti-Goals).
  */
 export function ChatWindow() {
-  // GAP 2 mitigation: agent state is derived from headers, never hardcoded
   const [currentAgent, setCurrentAgent] = useState<ActiveAgent>(DEFAULT_AGENT);
-
-  // Input state is managed manually in AI SDK v6 (not included in useChat)
   const [input, setInput] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
+  const [viewingConversation, setViewingConversation] = useState<SavedConversation | null>(null);
 
-  // Ref keeps the latest agent available inside the transport's body resolver
   const currentAgentRef = useRef<ActiveAgent>(DEFAULT_AGENT);
   currentAgentRef.current = currentAgent;
 
-  // Transport is memoized so it is not recreated on every render.
-  // Custom fetch wrapper captures x-agent headers before the stream body is consumed.
+  // Stable unique ID for this chat session
+  const sessionIdRef = useRef<string>(generateId());
+
+  // Load conversation history from localStorage on mount (client only)
+  useEffect(() => {
+    setSavedConversations(loadConversations());
+  }, []);
+
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
         api: '/api/chat',
-        // Passes current_agent to the route on every request (Resolvable — called per request)
         body: () => ({ current_agent: currentAgentRef.current.agent }),
-        // GAP 2 mitigation: intercept response to read agent identity headers
         fetch: async (url, init) => {
           const response = await fetch(url as RequestInfo, init as RequestInit);
           const agent = response.headers.get('x-agent') as AgentName | null;
@@ -117,15 +108,47 @@ export function ChatWindow() {
 
   const { messages, sendMessage, status } = useChat({ transport });
 
-  // useRef used here for DOM access only — not for state storage (IDE Rules exception)
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Smooth-scroll to the bottom anchor whenever the message list updates
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, viewingConversation]);
+
+  // Auto-save conversation to localStorage whenever messages update
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const storedMessages = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: getMessageText(m),
+      }))
+      .filter((m) => m.content.trim().length > 0);
+
+    if (storedMessages.length === 0) return;
+
+    const firstUserMsg = storedMessages.find((m) => m.role === 'user');
+    const raw = firstUserMsg?.content ?? 'Nuova conversazione';
+    const title = raw.length > 60 ? raw.slice(0, 60) + '…' : raw;
+
+    const conv: SavedConversation = {
+      id: sessionIdRef.current,
+      title,
+      date: formatDate(new Date().toISOString()),
+      agentName: currentAgentRef.current.name,
+      agentColor: currentAgentRef.current.color,
+      messageCount: storedMessages.length,
+      messages: storedMessages,
+    };
+
+    setSavedConversations((prev) => {
+      const updated = [conv, ...prev.filter((c) => c.id !== conv.id)];
+      persistConversations(updated);
+      return updated;
+    });
   }, [messages]);
 
-  // AI SDK v6 uses `status` instead of `isLoading`
   const isLoading = status === 'submitted' || status === 'streaming';
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -136,56 +159,122 @@ export function ChatWindow() {
     await sendMessage({ text });
   };
 
+  const handleNewChat = () => {
+    window.location.reload();
+  };
+
   return (
-    <div className="flex flex-col h-screen max-w-3xl mx-auto">
-      {/* Header with dynamic agent badge */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2a2a] bg-[#0f0f0f]">
-        <h1 className="text-lg font-semibold text-[#f0f0f0]">BIXBG Chatbot</h1>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => exportConversation(messages, currentAgent)}
-            disabled={messages.length === 0}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2a2a2a] text-[#f0f0f0] hover:bg-[#3a3a3a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            Esporta .md
-          </button>
-          <AgentIndicator agentName={currentAgent.name} agentColor={currentAgent.color} />
-        </div>
-      </div>
+    <div className="flex h-screen bg-[#0f0f0f] overflow-hidden">
+      {/* Collapsible sidebar */}
+      {sidebarOpen && (
+        <ConversationSidebar
+          conversations={savedConversations}
+          viewingId={viewingConversation?.id ?? null}
+          onSelect={setViewingConversation}
+          onNewChat={handleNewChat}
+        />
+      )}
 
-      {/* Message list */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
-        {/* Welcome message shown before any conversation starts */}
-        {messages.length === 0 && (
-          <MessageBubble
-            role="assistant"
-            content="Ciao Matteo. Dimmi dell'idea che hai in testa — anche se è ancora vaga, partiamo da lì."
-            agentName={DEFAULT_AGENT.name}
-            agentColor={DEFAULT_AGENT.color}
-          />
-        )}
-        {messages
-          .filter((msg) => msg.role === 'user' || msg.role === 'assistant')
-          .map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              role={msg.role as 'user' | 'assistant'}
-              content={getMessageText(msg)}
-              agentName={msg.role === 'assistant' ? currentAgent.name : undefined}
-              agentColor={msg.role === 'assistant' ? currentAgent.color : undefined}
+      {/* Main chat area */}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#2a2a2a] bg-[#0f0f0f] flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarOpen((s) => !s)}
+              className="p-1.5 rounded-lg text-[#555] hover:text-[#f0f0f0] hover:bg-[#1a1a1a] transition-colors"
+              aria-label="Toggle sidebar"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <rect y="2" width="16" height="1.5" rx="0.75" />
+                <rect y="7.25" width="16" height="1.5" rx="0.75" />
+                <rect y="12.5" width="16" height="1.5" rx="0.75" />
+              </svg>
+            </button>
+            <h1 className="text-sm font-semibold text-[#f0f0f0]">BIXBG Chatbot</h1>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {viewingConversation && (
+              <button
+                onClick={() => setViewingConversation(null)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#1a1a1a] text-[#888] hover:text-[#f0f0f0] hover:bg-[#2a2a2a] transition-colors"
+              >
+                ← Chat attiva
+              </button>
+            )}
+            <AgentIndicator
+              agentName={viewingConversation?.agentName ?? currentAgent.name}
+              agentColor={viewingConversation?.agentColor ?? currentAgent.color}
             />
-          ))}
-        {/* Scroll anchor — scrollIntoView target */}
-        <div ref={messagesEndRef} />
-      </div>
+          </div>
+        </div>
 
-      {/* Input — isLoading drives the disabled state dynamically */}
-      <ChatInput
-        disabled={isLoading}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onSubmit={handleSubmit}
-      />
+        {/* History mode banner */}
+        {viewingConversation && (
+          <div className="px-5 py-2 bg-[#111] border-b border-[#1e1e1e] flex items-center gap-2 text-xs text-[#555] flex-shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#444] inline-block flex-shrink-0" />
+            Stai visualizzando una conversazione precedente — usa ← Chat attiva per tornare
+          </div>
+        )}
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto px-6 py-6">
+            {/* Welcome message */}
+            {messages.length === 0 && !viewingConversation && (
+              <MessageBubble
+                role="assistant"
+                content="Ciao Matteo. Dimmi dell'idea che hai in testa — anche se è ancora vaga, partiamo da lì."
+                agentName={DEFAULT_AGENT.name}
+                agentColor={DEFAULT_AGENT.color}
+              />
+            )}
+
+            {/* Historical conversation */}
+            {viewingConversation &&
+              viewingConversation.messages.map((msg, i) => (
+                <MessageBubble
+                  key={i}
+                  role={msg.role}
+                  content={msg.content}
+                  agentName={msg.role === 'assistant' ? viewingConversation.agentName : undefined}
+                  agentColor={msg.role === 'assistant' ? viewingConversation.agentColor : undefined}
+                />
+              ))}
+
+            {/* Live conversation */}
+            {!viewingConversation &&
+              messages
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((msg) => (
+                  <MessageBubble
+                    key={msg.id}
+                    role={msg.role as 'user' | 'assistant'}
+                    content={getMessageText(msg)}
+                    agentName={msg.role === 'assistant' ? currentAgent.name : undefined}
+                    agentColor={msg.role === 'assistant' ? currentAgent.color : undefined}
+                  />
+                ))}
+
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* Input — hidden while viewing history */}
+        {!viewingConversation && (
+          <div className="flex-shrink-0">
+            <div className="max-w-3xl mx-auto">
+              <ChatInput
+                disabled={isLoading}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onSubmit={handleSubmit}
+              />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
