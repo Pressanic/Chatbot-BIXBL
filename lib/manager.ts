@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { generateObject, jsonSchema } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { MANAGER_PROMPT } from '../prompts/manager-prompt';
 import type { AgentName, RoutingDecision, ChatMessage } from './types';
@@ -9,13 +9,28 @@ import type { AgentName, RoutingDecision, ChatMessage } from './types';
 const VALID_AGENTS: AgentName[] = ['compass', 'architect', 'bridge'];
 
 /**
+ * Routing schema — enforces structured output via Anthropic tool calling.
+ * generateObject with jsonSchema bypasses text parsing entirely: the model
+ * is forced to return a validated object, eliminating JSON extraction issues.
+ */
+const routingSchema = jsonSchema<{ agent: string; reason: string }>({
+  type: 'object',
+  properties: {
+    agent: { type: 'string', enum: ['compass', 'architect', 'bridge'] },
+    reason: { type: 'string' },
+  },
+  required: ['agent', 'reason'],
+});
+
+/**
  * classifyIntent — calls the Manager LLM and returns a validated routing decision.
  *
+ * Uses generateObject (Anthropic tool calling) instead of generateText + JSON parsing
+ * to guarantee structured output regardless of model verbosity.
+ *
  * Risk R2 mitigation: output is validated against VALID_AGENTS before use.
- * Risk R3 mitigation: response time is logged to the console on every call.
- * Risk RISK1 mitigation: any failure (parse error, network, invalid value) returns
- *   a compass fallback instead of throwing — the UX never breaks.
- * Risk RISK3 mitigation: JSON.parse result is validated before casting to RoutingDecision.
+ * Risk R3 mitigation: response time is logged on every call.
+ * Risk R1 mitigation: any failure returns a compass fallback — UX never breaks.
  *
  * @param message - The user's latest message text
  * @param history - Truncated conversation history (already capped to MAX_HISTORY_MESSAGES)
@@ -27,16 +42,14 @@ export async function classifyIntent(
   history: ChatMessage[],
   currentAgent: AgentName | null,
 ): Promise<RoutingDecision> {
-  // Guard: entire function is wrapped — any uncaught error returns compass fallback
   const startTime = Date.now();
 
   try {
-    // Manager call — use Flash Lite for fast, low-cost routing
-    const { text } = await generateText({
-      model: anthropic('claude-haiku-4.5-20251001'),
+    const { object } = await generateObject({
+      model: anthropic('claude-haiku-4-5-20251001'),
+      schema: routingSchema,
       system: MANAGER_PROMPT,
       messages: [
-        // Map history: strip the 'agent' metadata field, keep only role + content
         ...history.map((m) => ({ role: m.role, content: m.content })),
         {
           role: 'user' as const,
@@ -46,40 +59,20 @@ export async function classifyIntent(
     });
 
     const elapsed = Date.now() - startTime;
-    // R3 mitigation: log latency on every call — target is under 2000ms
     console.log(`[manager] Routing decision in ${elapsed}ms`);
 
-    // Extract JSON object from anywhere in the response.
-    // Haiku sometimes adds preamble text or wraps JSON in code fences — this handles all cases.
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.warn('[manager] No JSON object found in response → fallback: compass');
-      return { agent: 'compass', reason: 'fallback: no JSON found in manager output' };
+    // R2 mitigation: validate agent value even though the schema constrains it
+    if (!VALID_AGENTS.includes(object.agent as AgentName)) {
+      console.warn(`[manager] Unexpected agent "${object.agent}" → fallback: compass`);
+      return { agent: 'compass', reason: 'fallback: unexpected agent value' };
     }
 
-    // RISK 3 mitigation: validate shape before casting — JSON.parse returns any
-    const parsed: unknown = JSON.parse(jsonMatch[0]);
-
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'agent' in parsed &&
-      typeof (parsed as Record<string, unknown>).agent === 'string' &&
-      VALID_AGENTS.includes((parsed as Record<string, unknown>).agent as AgentName)
-    ) {
-      // R2 mitigation: log every routing decision with reason for debugging
-      console.log(`[manager] Route → ${(parsed as RoutingDecision).agent} | reason: ${(parsed as RoutingDecision).reason}`);
-      return parsed as RoutingDecision;
-    }
-
-    // Invalid shape — log and fall back (RISK 1 + RISK 3 mitigation)
-    console.warn('[manager] Invalid shape → fallback: compass | reason: invalid output shape');
-    return { agent: 'compass', reason: 'fallback: invalid manager output shape' };
+    console.log(`[manager] Route → ${object.agent} | reason: ${object.reason}`);
+    return { agent: object.agent as AgentName, reason: object.reason };
 
   } catch (err) {
     const elapsed = Date.now() - startTime;
-    // RISK 1 mitigation: never propagate — always return a usable fallback
-    console.error(`[manager] Error → fallback: compass | after ${elapsed}ms`);
-    return { agent: 'compass', reason: 'fallback: manager call or parse failed' };
+    console.error(`[manager] Error → fallback: compass | after ${elapsed}ms`, err);
+    return { agent: 'compass', reason: 'fallback: manager call failed' };
   }
 }
