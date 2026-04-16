@@ -172,21 +172,19 @@ export async function POST(request: NextRequest) {
     // Specialist agent streaming call — use Sonnet for quality responses
     const streamStart = Date.now();
 
-    // Bridge agent uses createAnthropic() directly for provider-specific web search tool.
-    // All other agents route through the Vercel AI Gateway (plain model string).
     const isBridge = decision.agent === 'bridge';
-    const anthropic = isBridge ? createAnthropic() : null;
+    const anthropic = createAnthropic();
 
     // R4 mitigation: if streaming fails, fall back to generateText and return full JSON
     try {
       const result = await streamText({
         model: isBridge
-          ? anthropic!('claude-sonnet-4.5')
-          : 'anthropic/claude-sonnet-4.6',
+          ? anthropic('claude-sonnet-4-5')
+          : anthropic('claude-sonnet-4-6'),
         system,
         messages: agentMessages,
         ...(isBridge && {
-          tools: { web_search: anthropic!.tools.webSearch_20250305({ maxUses: 5 }) },
+          tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 5 }) },
           stopWhen: stepCountIs(5),
         }),
       });
@@ -202,7 +200,7 @@ export async function POST(request: NextRequest) {
       console.error('[route] streamText failed, using non-streaming fallback:', streamErr);
       const { generateText } = await import('ai');
       const { text } = await generateText({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: anthropic('claude-sonnet-4-6'),
         system,
         messages: agentMessages,
       });
