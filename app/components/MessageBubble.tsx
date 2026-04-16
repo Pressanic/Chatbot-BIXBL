@@ -1,5 +1,42 @@
+'use client';
+
+import ReactMarkdown from 'react-markdown';
+
+/**
+ * stripCodeFenceLabel — removes opening code fence labels used as structured output markers.
+ * Strips ` ```partners `, ` ```experience `, ` ```profile `, ` ```summary ` labels
+ * so ReactMarkdown receives clean content without artifact labels.
+ */
+function stripCodeFenceLabel(content: string): string {
+  return content.replace(/^```(partners|experience|profile|summary)\n?/im, '```\n');
+}
+
+/**
+ * hasSummaryFence — returns true if content contains a ` ```summary ` block.
+ * Used to conditionally show the export download button.
+ */
+function hasSummaryFence(content: string): boolean {
+  return /```summary/i.test(content);
+}
+
+/**
+ * downloadSummary — extracts text inside ` ```summary ` block and downloads as .md file.
+ */
+function downloadSummary(content: string): void {
+  const match = content.match(/```summary\n?([\s\S]*?)```/i);
+  const text = match ? match[1].trim() : content;
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bixbg-summary-${new Date().toISOString().slice(0, 10)}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /**
  * MessageBubble — renders a single chat message with role-appropriate styling.
+ * Assistant messages are rendered with ReactMarkdown + Tailwind typography prose.
  * @param content - The message text content
  * @param role - 'user' or 'assistant' — controls alignment and style
  * @param agentName - Display name shown above assistant messages
@@ -26,6 +63,9 @@ export function MessageBubble({
     );
   }
 
+  const cleanContent = stripCodeFenceLabel(content);
+  const showDownload = hasSummaryFence(content);
+
   return (
     <div className="flex justify-start mb-4">
       <div
@@ -40,7 +80,17 @@ export function MessageBubble({
             {agentName}
           </p>
         )}
-        {content}
+        <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-li:my-0 prose-headings:text-[#f0f0f0] prose-a:text-[#6475FA]">
+          <ReactMarkdown>{cleanContent}</ReactMarkdown>
+        </div>
+        {showDownload && (
+          <button
+            onClick={() => downloadSummary(content)}
+            className="mt-3 text-xs px-3 py-1.5 rounded-lg border border-[#3a3a3a] text-[#aaa] hover:text-[#f0f0f0] hover:border-[#6475FA] transition-colors"
+          >
+            Scarica .md
+          </button>
+        )}
       </div>
     </div>
   );

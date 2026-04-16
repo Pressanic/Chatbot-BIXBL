@@ -35,6 +35,46 @@ function getMessageText(msg: UIMessage): string {
 }
 
 /**
+ * exportConversation — generates a .md file from the current
+ * conversation history and triggers a browser download.
+ * Uses Blob + URL.createObjectURL — no server required.
+ * @param messages - The full UIMessage array from useChat
+ * @param currentAgent - The currently active agent (for context)
+ */
+function exportConversation(
+  messages: UIMessage[],
+  currentAgent: ActiveAgent,
+): void {
+  const timestamp = new Date().toISOString().split('T')[0];
+  const lines: string[] = [
+    '# BIXBG — Conversazione esportata',
+    `**Data:** ${timestamp}`,
+    '',
+    '---',
+    '',
+  ];
+
+  for (const msg of messages) {
+    const text = getMessageText(msg);
+    if (!text.trim()) continue;
+    if (msg.role === 'user') {
+      lines.push(`**Matteo:** ${text}`, '');
+    } else {
+      lines.push(`**BIXBG:** ${text}`, '');
+    }
+  }
+
+  const content = lines.join('\n');
+  const blob = new Blob([content], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bixbg-conversazione-${timestamp}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * ChatWindow — main chat container. Client component.
  * Uses useChat (AI SDK v6) for streaming and message history.
  * Agent identity is driven exclusively by x-agent response headers (GAP 2 mitigation).
@@ -101,7 +141,16 @@ export function ChatWindow() {
       {/* Header with dynamic agent badge */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2a2a] bg-[#0f0f0f]">
         <h1 className="text-lg font-semibold text-[#f0f0f0]">BIXBG Chatbot</h1>
-        <AgentIndicator agentName={currentAgent.name} agentColor={currentAgent.color} />
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => exportConversation(messages, currentAgent)}
+            disabled={messages.length === 0}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2a2a2a] text-[#f0f0f0] hover:bg-[#3a3a3a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Esporta .md
+          </button>
+          <AgentIndicator agentName={currentAgent.name} agentColor={currentAgent.color} />
+        </div>
       </div>
 
       {/* Message list */}

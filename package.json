@@ -11,10 +11,12 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",
     "@ai-sdk/react": "^3.0.164",
+    "@tailwindcss/typography": "^0.5.19",
     "ai": "^6.0.162",
     "next": "^16.2.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@types/node": "^20",

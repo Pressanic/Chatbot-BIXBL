@@ -34,7 +34,7 @@ export async function classifyIntent(
   try {
     // Manager call — use fastest Claude model to minimize latency (Risk R3)
     const { text } = await generateText({
-      model: createAnthropic()('claude-haiku-4-5'),
+      model: 'anthropic/claude-haiku-4.5',
       system: MANAGER_PROMPT,
       messages: [
         // Map history: strip the 'agent' metadata field, keep only role + content

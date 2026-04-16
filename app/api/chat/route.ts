@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { streamText } from 'ai';
+import { streamText, stepCountIs } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { classifyIntent } from '@/lib/manager';
 import { loadKnowledgeBase } from '@/lib/kb-loader';
@@ -127,7 +127,7 @@ function buildAgentContext(
  * Sprint 4 will extend this to: load KB → call specialist agent → stream response.
  *
  * Risk R1 mitigation: history is truncated to MAX_HISTORY_MESSAGES before any LLM call.
- * Risk R5 mitigation: ANTHROPIC_API_KEY is accessed only server-side (via classifyIntent).
+ * Risk R5 mitigation: API keys are accessed only server-side (via classifyIntent).
  */
 export async function POST(request: NextRequest) {
   // Phase 1: validate input — return 400 on any validation failure
@@ -172,12 +172,23 @@ export async function POST(request: NextRequest) {
     // Specialist agent streaming call — use Sonnet for quality responses
     const streamStart = Date.now();
 
+    // Bridge agent uses createAnthropic() directly for provider-specific web search tool.
+    // All other agents route through the Vercel AI Gateway (plain model string).
+    const isBridge = decision.agent === 'bridge';
+    const anthropic = isBridge ? createAnthropic() : null;
+
     // R4 mitigation: if streaming fails, fall back to generateText and return full JSON
     try {
       const result = await streamText({
-        model: createAnthropic()('claude-sonnet-4-5'),
+        model: isBridge
+          ? anthropic!('claude-sonnet-4.5')
+          : 'anthropic/claude-sonnet-4.6',
         system,
         messages: agentMessages,
+        ...(isBridge && {
+          tools: { web_search: anthropic!.tools.webSearch_20250305({ maxUses: 5 }) },
+          stopWhen: stepCountIs(5),
+        }),
       });
       console.log(`[route] Stream started for ${decision.agent} in ${Date.now() - streamStart}ms`);
       // Note: toDataStreamResponse() was renamed to toUIMessageStreamResponse() in AI SDK v6
@@ -191,7 +202,7 @@ export async function POST(request: NextRequest) {
       console.error('[route] streamText failed, using non-streaming fallback:', streamErr);
       const { generateText } = await import('ai');
       const { text } = await generateText({
-        model: createAnthropic()('claude-sonnet-4-5'),
+        model: 'anthropic/claude-sonnet-4.6',
         system,
         messages: agentMessages,
       });
